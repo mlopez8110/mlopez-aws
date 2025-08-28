@@ -1,0 +1,203 @@
+service: appointment-service
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: nodejs18.x
+  region: us-east-2
+  stage: ${opt:stage, 'dev'}
+  environment:
+    APPOINTMENTS_TABLE: ${self:service}-appointments-${self:provider.stage}
+    SNS_TOPIC_NAME: appointmentTopic-${self:provider.stage}
+    EVENT_BUS_NAME: appointmentBus-${self:provider.stage}
+    RDS_HOST: database-mysql.c3qa66c6k2c7.us-east-2.rds.amazonaws.com
+    RDS_USER: admin
+    RDS_PASSWORD: sGUicl8xjWIfjrExMdF1
+    RDS_DATABASE: appointments_mysql
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - dynamodb:PutItem
+        - dynamodb:Query
+        - dynamodb:UpdateItem
+      Resource:
+        - arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.APPOINTMENTS_TABLE}
+        - arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.APPOINTMENTS_TABLE}/index/insuredId-index
+    - Effect: Allow
+      Action:
+        - sns:Publish
+      Resource:
+        - Ref: AppointmentTopic
+    - Effect: Allow
+      Action:
+        - sqs:SendMessage
+        - sqs:ReceiveMessage
+        - sqs:DeleteMessage
+        - sqs:GetQueueAttributes
+      Resource:
+        - Fn::GetAtt: [SQSPE, Arn]
+        - Fn::GetAtt: [SQSCL, Arn]
+        - Fn::GetAtt: [CompletionQueue, Arn]
+    - Effect: Allow
+      Action:
+        - events:PutEvents
+      Resource: "*"
+
+plugins:
+  - serverless-plugin-typescript
+  - serverless-offline
+  # - serverless-dynamodb-local
+
+functions:
+  appointment:
+    handler: src/lambdas/appointment.handler
+    environment:
+      SNS_TOPIC_ARN:
+        Ref: AppointmentTopic
+      EVENT_BUS_NAME: ${self:provider.environment.EVENT_BUS_NAME}
+      APPOINTMENTS_TABLE: ${self:provider.environment.APPOINTMENTS_TABLE}
+    events:
+      - http:
+          path: appointments
+          method: post
+      - http:
+          path: appointments/{insuredId}
+          method: get
+
+  appointmentCountryPE:
+    handler: src/lambdas/appointmentCountry.handler
+    environment:
+      EVENT_BUS_NAME: ${self:provider.environment.EVENT_BUS_NAME}
+    events:
+      - sqs:
+          arn:
+            Fn::GetAtt: [SQSPE, Arn]
+
+  appointmentCountryCL:
+    handler: src/lambdas/appointmentCountry.handler
+    environment:
+      EVENT_BUS_NAME: ${self:provider.environment.EVENT_BUS_NAME}
+    events:
+      - sqs:
+          arn:
+            Fn::GetAtt: [SQSCL, Arn]
+
+  appointmentConfirmation:
+    handler: src/lambdas/appointmentConfirmation.handler
+    environment:
+      APPOINTMENTS_TABLE: ${self:provider.environment.APPOINTMENTS_TABLE}
+    events:
+      - sqs:
+          arn:
+            Fn::GetAtt: [CompletionQueue, Arn]
+
+resources:
+  Resources:
+    AppointmentsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.APPOINTMENTS_TABLE}
+        AttributeDefinitions:
+          - AttributeName: appointmentId
+            AttributeType: S
+          - AttributeName: insuredId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: appointmentId
+            KeyType: HASH
+        ProvisionedThroughput:
+          ReadCapacityUnits: 1
+          WriteCapacityUnits: 1
+        GlobalSecondaryIndexes:
+          - IndexName: insuredId-index
+            KeySchema:
+              - AttributeName: insuredId
+                KeyType: HASH
+            Projection:
+              ProjectionType: ALL
+            ProvisionedThroughput:
+              ReadCapacityUnits: 1
+              WriteCapacityUnits: 1
+
+    AppointmentTopic:
+      Type: AWS::SNS::Topic
+      Properties:
+        TopicName: ${self:provider.environment.SNS_TOPIC_NAME}
+
+    SQSPE:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: SQSPE-${self:provider.stage}
+
+    SQSCL:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: SQSCL-${self:provider.stage}
+
+    CompletionQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: CompletionQueue-${self:provider.stage}
+
+    SnsSubscriptionPE:
+      Type: AWS::SNS::Subscription
+      Properties:
+        TopicArn:
+          Ref: AppointmentTopic
+        Protocol: sqs
+        Endpoint:
+          Fn::GetAtt: [SQSPE, Arn]
+        FilterPolicy:
+          countryISO:
+            - "PE"
+
+    SnsSubscriptionCL:
+      Type: AWS::SNS::Subscription
+      Properties:
+        TopicArn:
+          Ref: AppointmentTopic
+        Protocol: sqs
+        Endpoint:
+          Fn::GetAtt: [SQSCL, Arn]
+        FilterPolicy:
+          countryISO:
+            - "CL"
+
+    AppointmentBus:
+      Type: AWS::Events::EventBus
+      Properties:
+        Name: ${self:provider.environment.EVENT_BUS_NAME}
+
+    AppointmentCompletionRule:
+      Type: AWS::Events::Rule
+      Properties:
+        Name: AppointmentCompletionRule-${self:provider.stage}
+        EventBusName: !Ref AppointmentBus
+        EventPattern:
+          source:
+            - "appointment.country"
+        Targets:
+          - Arn:
+              Fn::GetAtt: [CompletionQueue, Arn]
+            Id: "CompletionQueueTarget"
+
+    EventBridgeToSqsPermission:
+      Type: AWS::SQS::QueuePolicy
+      Properties:
+        Queues:
+          - Ref: CompletionQueue
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: events.amazonaws.com
+              Action: "sqs:SendMessage"
+              Resource:
+                Fn::GetAtt: [CompletionQueue, Arn]
+
+  Outputs:
+    AppointmentsTableName:
+      Value: ${self:provider.environment.APPOINTMENTS_TABLE}
+
