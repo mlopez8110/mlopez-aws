@@ -51,13 +51,12 @@ npx serverless deploy --region us-east-2
 5. Después del deploy, obtén el `SNS Topic ARN` si lo necesitas y configura variables RDS en el entorno (o usa secretos). El archivo `serverless.yml` crea todos los recursos necesarios.
 
 ## Swagger
-# puerto 3000
-http://localhost:3000/swagger
+npm run start:swagger
+# puerto 4000
+http://localhost:4000/docs/
 
 ## Archivos importantes
 - `serverless.yml` - define infra y funciones
 - `src/` - código fuente (domain, application, infrastructure, lambdas)
 - `tests/` - pruebas unitarias (Jest)
 - `swagger.yml` - OpenAPI (plantilla)
-
-6.

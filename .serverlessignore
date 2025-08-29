@@ -1,0 +1,13 @@
+swagger-local.ts
+swagger-local.js
+swagger-local.*.map
+
+.vscode/
+.env
+*.log
+
+swagger.yaml
+*.swagger.yaml
+*.openapi.yaml
+
+node_modules/.cache/
